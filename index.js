@@ -14,12 +14,13 @@ const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 // Middleware
 app.use(
   cors({
-    origin: ["http://localhost:5173", "https://buildbox-a12.web.app"],
+    origin: "http://localhost:5173",
     credentials: true,
   })
 );
 
-
+// Stripe webhook endpoint - Must be before express.json()
+// Use express.raw for verifying the webhook signature
 app.post(
   "/stripe-webhook",
   express.raw({ type: "application/json" }),

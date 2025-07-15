@@ -26,9 +26,6 @@ importers:
       mongodb:
         specifier: ^6.17.0
         version: 6.17.0
-      stripe:
-        specifier: ^18.3.0
-        version: 18.3.0(@types/node@16.18.11)
       vercel:
         specifier: ^42.1.1
         version: 42.3.0
@@ -1259,15 +1256,6 @@ packages:
   strip-ansi@7.1.0:
     resolution: {integrity: sha512-iq6eVVI64nQQTRYq2KtEg2d2uU7LElhTJwsH4YzIHZshxlgZms/wIc4VoDQTlG/IvVIrBKG06CrZnp0qv7hkcQ==}
     engines: {node: '>=12'}
-
-  stripe@18.3.0:
-    resolution: {integrity: sha512-FkxrTUUcWB4CVN2yzgsfF/YHD6WgYHduaa7VmokCy5TLCgl5UNJkwortxcedrxSavQ8Qfa4Ir4JxcbIYiBsyLg==}
-    engines: {node: '>=12.*'}
-    peerDependencies:
-      '@types/node': '>=12.x.x'
-    peerDependenciesMeta:
-      '@types/node':
-        optional: true
 
   supports-color@5.5.0:
     resolution: {integrity: sha512-QjVjwdXIt408MIiAqCX4oUKsgU2EqAGzs2Ppkm4aQYbjm+ZEWEcW4SfFNTr4uMNZma0ey4f5lgLrkB0aX0QMow==}
@@ -2651,12 +2639,6 @@ snapshots:
   strip-ansi@7.1.0:
     dependencies:
       ansi-regex: 6.1.0
-
-  stripe@18.3.0(@types/node@16.18.11):
-    dependencies:
-      qs: 6.14.0
-    optionalDependencies:
-      '@types/node': 16.18.11
 
   supports-color@5.5.0:
     dependencies:
