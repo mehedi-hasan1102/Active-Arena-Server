@@ -57,16 +57,6 @@ app.post(
         );
 
         // 2. Create a new payment record
-        const newPayment = {
-          bookingId: new ObjectId(bookingId),
-          transactionId: paymentIntent.id,
-          amount: paymentIntent.amount / 100, // amount is in cents
-          currency: paymentIntent.currency,
-          status: paymentIntent.status,
-          createdAt: new Date(),
-        };
-        await paymentsCol.insertOne(newPayment);
-
         console.log(`✅ Successfully processed payment for booking ${bookingId}`);
       } catch (dbError) {
         console.error("❌ Database update error after payment:", dbError);
@@ -101,8 +91,8 @@ let db,
   bookingsCol,
   usersCol,
   couponsCol,
-  announcementsCol,
-  paymentsCol;
+  announcementsCol;
+ 
 
 // Connect to MongoDB
 async function connectDB() {
@@ -114,7 +104,7 @@ async function connectDB() {
     usersCol = db.collection("users");
     couponsCol = db.collection("coupons");
     announcementsCol = db.collection("announcements");
-    paymentsCol = db.collection("payments"); // New collection for payments
+   
     console.log("✅ MongoDB connected");
   } catch (err) {
     console.error("❌ MongoDB connection error:", err);
@@ -272,13 +262,20 @@ app.delete("/courts/:id", async (req, res) => {
 
 // ========== BOOKINGS ROUTES ==========
 
-// GET all bookings with user and court details
+
+// GET all bookings with optional filters (userId, status, paymentStatus, courtName)
+
 app.get("/bookings", async (req, res) => {
   try {
-    const { status, paymentStatus, courtName } = req.query;
+    const { status, paymentStatus, courtName, userId } = req.query;
+
     const query = {};
     if (status) query.status = status;
     if (paymentStatus) query.paymentStatus = paymentStatus;
+    if (userId) {
+      
+      query.userId = userId;
+    }
 
     const pipeline = [
       { $match: query },
@@ -286,7 +283,7 @@ app.get("/bookings", async (req, res) => {
         $lookup: {
           from: "users",
           localField: "userId",
-          foreignField: "_id",
+          foreignField: "uid", // যদি users collection এ uid থাকে firebase uid হিসেবে
           as: "userDetails",
         },
       },
@@ -298,12 +295,8 @@ app.get("/bookings", async (req, res) => {
           as: "courtDetails",
         },
       },
-      {
-        $unwind: { path: "$userDetails", preserveNullAndEmptyArrays: true },
-      },
-      {
-        $unwind: { path: "$courtDetails", preserveNullAndEmptyArrays: true },
-      },
+      { $unwind: { path: "$userDetails", preserveNullAndEmptyArrays: true } },
+      { $unwind: { path: "$courtDetails", preserveNullAndEmptyArrays: true } },
       {
         $match: courtName
           ? { "courtDetails.name": { $regex: courtName, $options: "i" } }
@@ -322,6 +315,7 @@ app.get("/bookings", async (req, res) => {
           price: 1,
           status: 1,
           paymentStatus: 1,
+          transactionId: 1,
           createdAt: 1,
         },
       },
@@ -330,10 +324,11 @@ app.get("/bookings", async (req, res) => {
     const bookings = await bookingsCol.aggregate(pipeline).toArray();
     res.send({ bookings });
   } catch (err) {
-    console.error(err);
+    console.error("❌ Error fetching bookings:", err);
     res.status(500).send({ error: "Failed to fetch bookings" });
   }
 });
+
 
 // POST a new booking
 app.post("/bookings", async (req, res) => {
@@ -668,6 +663,33 @@ app.delete("/announcements/:id", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).send({ error: "Failed to delete announcement" });
+  }
+});
+
+// payment history
+app.post("/payment-success", async (req, res) => {
+  const { bookingId, transactionId } = req.body;
+
+  try {
+    const result = await bookingsCol.updateOne(
+      { _id: new ObjectId(bookingId) },
+      {
+        $set: {
+          paymentStatus: "paid",
+          transactionId,
+          paidAt: new Date(),
+        },
+      }
+    );
+
+    if (result.modifiedCount === 1) {
+      res.send({ success: true });
+    } else {
+      res.status(404).send({ error: "Booking not found" });
+    }
+  } catch (err) {
+    console.error("Error updating booking after payment:", err);
+    res.status(500).send({ error: "Internal Server Error" });
   }
 });
 
