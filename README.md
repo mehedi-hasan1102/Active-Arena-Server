@@ -37,19 +37,8 @@ This is the **backend server** of the **Active Arena** — a full-featured **Spo
 - **bcrypt** for password hashing
 - **nodemon** for development
 
----
 
-## 📁 Folder Structure
 
-```
-📦 server/
-├── index.js          # Main server entry
-├── .env              # Environment variables
-├── /routes           # All route handlers (optional)
-├── /controllers      # Business logic (optional)
-├── /middlewares      # Auth, role check, etc.
-└── /utils            # Helper functions (optional)
-```
 
 ---
 
