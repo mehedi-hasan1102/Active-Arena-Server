@@ -1,20 +1,21 @@
-
-
+const jwt = require("jsonwebtoken");
+const cookieParser = require("cookie-parser");
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const { MongoClient, ObjectId, ServerApiVersion } = require("mongodb");
 
-const app = express();
-const port = process.env.PORT || 5000;
-
 // Stripe
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
+const app = express();
+const port = process.env.PORT || 5000;
+
 // Middleware
+app.use(cookieParser());
 app.use(
   cors({
-    origin: "http://localhost:5173",
+    origin: ["http://localhost:5173", "https://buildbox-a12.web.app"],
     credentials: true,
   })
 );
@@ -50,18 +51,19 @@ app.post(
           throw new Error("Booking ID missing in payment intent metadata");
         }
 
-        // 1. Update booking status to 'confirmed'
-        await bookingsCol.updateOne(
+        // Update booking status to 'confirmed'
+        const result = await bookingsCol.updateOne(
           { _id: new ObjectId(bookingId) },
           { $set: { paymentStatus: "completed", status: "Confirmed" } }
         );
 
-        // 2. Create a new payment record
+        if (result.matchedCount === 0) {
+          throw new Error("Booking not found");
+        }
+
         console.log(`✅ Successfully processed payment for booking ${bookingId}`);
       } catch (dbError) {
         console.error("❌ Database update error after payment:", dbError);
-        // If the DB update fails, you might need manual intervention.
-        // For now, we'll return a 500 to Stripe to signal a problem.
         return res.status(500).json({ received: false, error: dbError.message });
       }
     } else {
@@ -86,13 +88,7 @@ const client = new MongoClient(uri, {
   },
 });
 
-let db,
-  courtsCol,
-  bookingsCol,
-  usersCol,
-  couponsCol,
-  announcementsCol;
- 
+let db, courtsCol, bookingsCol, usersCol, couponsCol, announcementsCol;
 
 // Connect to MongoDB
 async function connectDB() {
@@ -104,15 +100,58 @@ async function connectDB() {
     usersCol = db.collection("users");
     couponsCol = db.collection("coupons");
     announcementsCol = db.collection("announcements");
-   
     console.log("✅ MongoDB connected");
   } catch (err) {
     console.error("❌ MongoDB connection error:", err);
+    process.exit(1); // Exit process on connection failure
   }
 }
 connectDB();
 
-// ========== PAYMENT ROUTES ==========
+// JWT Middleware
+const verifyToken = (req, res, next) => {
+  const token = req.cookies.token;
+  if (!token) {
+    return res.status(401).send({ error: "No token provided" });
+  }
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded; // Attach decoded user data to request
+    next();
+  } catch (err) {
+    console.error("❌ Invalid token:", err.message);
+    return res.status(401).send({ error: "Invalid token" });
+  }
+};
+
+// JWT Route
+app.post("/jwt", async (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).send({ error: "Email is required" });
+  }
+  const user = { email };
+  const token = jwt.sign(user, process.env.JWT_SECRET, { expiresIn: "2h" });
+  res.cookie("token", token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production", // Secure in production
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax", // Adjust for local dev
+  });
+  res.send({ message: "Token sent", status: true });
+});
+
+// Logout Route
+app.post("/logout", (req, res) => {
+  res.clearCookie("token", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+    path: "/",
+  });
+  res.send({ message: "Logged out successfully" });
+});
+
+// ========== PAYMENT ROUTES ==========/
 
 // POST validate coupon
 app.post("/validate-coupon", async (req, res) => {
@@ -136,7 +175,7 @@ app.post("/validate-coupon", async (req, res) => {
       discount: coupon.discount,
     });
   } catch (err) {
-    console.error(err);
+    console.error("❌ Coupon validation error:", err);
     res.status(500).send({ error: "Failed to validate coupon" });
   }
 });
@@ -157,11 +196,11 @@ app.post("/create-payment-intent", async (req, res) => {
     }
 
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: amount,
+      amount,
       currency: "usd",
       payment_method_types: ["card"],
       metadata: {
-        bookingId: bookingId.toString(), // Add bookingId to metadata
+        bookingId: bookingId.toString(),
       },
     });
 
@@ -169,7 +208,7 @@ app.post("/create-payment-intent", async (req, res) => {
       clientSecret: paymentIntent.client_secret,
     });
   } catch (err) {
-    console.error("Stripe Error:", err);
+    console.error("❌ Stripe Error:", err);
     res.status(500).send({ error: "Failed to create payment intent" });
   }
 });
@@ -181,13 +220,14 @@ app.get("/courts", async (req, res) => {
   try {
     const courts = await courtsCol.find().toArray();
     res.send({ courts });
-  } catch {
+  } catch (err) {
+    console.error("❌ Error fetching courts:", err);
     res.status(500).send({ error: "Failed to fetch courts" });
   }
 });
 
 // POST new court
-app.post("/courts", async (req, res) => {
+app.post("/courts", verifyToken, async (req, res) => {
   try {
     const { name, type, status, price, image, availableSlots } = req.body;
 
@@ -208,13 +248,14 @@ app.post("/courts", async (req, res) => {
 
     const result = await courtsCol.insertOne(newCourt);
     res.status(201).send({ message: "Court added", id: result.insertedId });
-  } catch {
+  } catch (err) {
+    console.error("❌ Error adding court:", err);
     res.status(500).send({ error: "Failed to add court" });
   }
 });
 
 // PUT update court
-app.put("/courts/:id", async (req, res) => {
+app.put("/courts/:id", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { name, type, status, price, image, availableSlots } = req.body;
@@ -236,46 +277,45 @@ app.put("/courts/:id", async (req, res) => {
       { $set: updateData }
     );
 
-    if (result.matchedCount === 0)
+    if (result.matchedCount === 0) {
       return res.status(404).send({ error: "Court not found" });
+    }
 
     res.send({ message: "Court updated", modifiedCount: result.modifiedCount });
-  } catch {
+  } catch (err) {
+    console.error("❌ Error updating court:", err);
     res.status(500).send({ error: "Failed to update court" });
   }
 });
 
 // DELETE a court
-app.delete("/courts/:id", async (req, res) => {
+app.delete("/courts/:id", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
 
     const result = await courtsCol.deleteOne({ _id: new ObjectId(id) });
-    if (result.deletedCount === 0)
+    if (result.deletedCount === 0) {
       return res.status(404).send({ error: "Court not found" });
+    }
 
     res.send({ message: "Court deleted", deletedCount: result.deletedCount });
-  } catch {
+  } catch (err) {
+    console.error("❌ Error deleting court:", err);
     res.status(500).send({ error: "Failed to delete court" });
   }
 });
 
 // ========== BOOKINGS ROUTES ==========
 
-
-// GET all bookings with optional filters (userId, status, paymentStatus, courtName)
-
-app.get("/bookings", async (req, res) => {
+// GET all bookings with optional filters
+app.get("/bookings", verifyToken, async (req, res) => {
   try {
     const { status, paymentStatus, courtName, userId } = req.query;
 
     const query = {};
     if (status) query.status = status;
     if (paymentStatus) query.paymentStatus = paymentStatus;
-    if (userId) {
-      
-      query.userId = userId;
-    }
+    if (userId) query.userId = userId;
 
     const pipeline = [
       { $match: query },
@@ -283,7 +323,7 @@ app.get("/bookings", async (req, res) => {
         $lookup: {
           from: "users",
           localField: "userId",
-          foreignField: "uid", // যদি users collection এ uid থাকে firebase uid হিসেবে
+          foreignField: "uid",
           as: "userDetails",
         },
       },
@@ -329,25 +369,13 @@ app.get("/bookings", async (req, res) => {
   }
 });
 
-
 // POST a new booking
-app.post("/bookings", async (req, res) => {
+app.post("/bookings", verifyToken, async (req, res) => {
   try {
     const { courtId, userId, userEmail, slots, date, price } = req.body;
 
-    if (
-      !courtId ||
-      !userId ||
-      !userEmail ||
-      !slots ||
-      !Array.isArray(slots) ||
-      slots.length === 0 ||
-      !date ||
-      !price
-    ) {
-      return res
-        .status(400)
-        .send({ error: "All fields required and slots must be a non-empty array" });
+    if (!courtId || !userId || !userEmail || !slots || !Array.isArray(slots) || slots.length === 0 || !date || !price) {
+      return res.status(400).send({ error: "All fields required and slots must be a non-empty array" });
     }
 
     const newBooking = {
@@ -365,13 +393,13 @@ app.post("/bookings", async (req, res) => {
     const result = await bookingsCol.insertOne(newBooking);
     res.status(201).send({ message: "Booking created", bookingId: result.insertedId });
   } catch (err) {
-    console.error(err);
+    console.error("❌ Error creating booking:", err);
     res.status(500).send({ error: "Failed to create booking" });
   }
 });
 
 // PUT update booking status AND promote user to 'member'
-app.put("/bookings/:id/status", async (req, res) => {
+app.put("/bookings/:id/status", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { status, userEmail, userId } = req.body;
@@ -385,10 +413,7 @@ app.put("/bookings/:id/status", async (req, res) => {
 
     await bookingsCol.updateOne({ _id: new ObjectId(id) }, { $set: { status } });
 
-    // Determine email for updating user role
     let emailToUpdate = userEmail || booking.userEmail;
-
-    // If no email yet, try fetching from users collection by userId
     if (!emailToUpdate && userId) {
       const user = await usersCol.findOne({ _id: new ObjectId(userId) });
       if (user) emailToUpdate = user.email;
@@ -403,13 +428,30 @@ app.put("/bookings/:id/status", async (req, res) => {
 
     res.send({ message: "Booking status updated" });
   } catch (err) {
-    console.error(err);
+    console.error("❌ Error updating booking status:", err);
     res.status(500).send({ error: "Failed to update booking status" });
   }
 });
 
+// DELETE a booking by ID
+app.delete("/bookings/:id", verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await bookingsCol.deleteOne({ _id: new ObjectId(id) });
+    if (result.deletedCount === 0) {
+      return res.status(404).send({ error: "Booking not found" });
+    }
+
+    res.send({ message: "Booking deleted", deletedCount: result.deletedCount });
+  } catch (err) {
+    console.error("❌ Error deleting booking:", err);
+    res.status(500).send({ error: "Failed to delete booking" });
+  }
+});
+
 // PUT update booking payment status
-app.put("/bookings/:id/payment", async (req, res) => {
+app.put("/bookings/:id/payment", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { paymentStatus } = req.body;
@@ -428,7 +470,7 @@ app.put("/bookings/:id/payment", async (req, res) => {
 
     res.send({ message: "Booking payment status updated" });
   } catch (err) {
-    console.error(err);
+    console.error("❌ Error updating payment status:", err);
     res.status(500).send({ error: "Failed to update booking payment status" });
   }
 });
@@ -436,11 +478,12 @@ app.put("/bookings/:id/payment", async (req, res) => {
 // ========== USER ROUTES ==========
 
 // GET all users
-app.get("/users", async (req, res) => {
+app.get("/users", verifyToken, async (req, res) => {
   try {
     const users = await usersCol.find().toArray();
     res.send({ users });
-  } catch {
+  } catch (err) {
+    console.error("❌ Error fetching users:", err);
     res.status(500).send({ error: "Failed to get users" });
   }
 });
@@ -461,17 +504,22 @@ app.post("/users", async (req, res) => {
 
     const result = await usersCol.insertOne({ name, email, role: "user" });
     res.status(201).send({ message: "User added", id: result.insertedId });
-  } catch {
+  } catch (err) {
+    console.error("❌ Error adding user:", err);
     res.status(500).send({ error: "Failed to add user" });
   }
 });
 
 // DELETE user
-app.delete("/users/:id", async (req, res) => {
+app.delete("/users/:id", verifyToken, async (req, res) => {
   try {
     const result = await usersCol.deleteOne({ _id: new ObjectId(req.params.id) });
+    if (result.deletedCount === 0) {
+      return res.status(404).send({ error: "User not found" });
+    }
     res.send({ message: "User deleted", deletedCount: result.deletedCount });
-  } catch {
+  } catch (err) {
+    console.error("❌ Error deleting user:", err);
     res.status(500).send({ error: "Failed to delete user" });
   }
 });
@@ -486,13 +534,13 @@ app.get("/coupons", async (req, res) => {
     const coupons = await couponsCol.find(query).toArray();
     res.send({ coupons });
   } catch (err) {
-    console.error(err);
+    console.error("❌ Error fetching coupons:", err);
     res.status(500).send({ error: "Failed to fetch coupons" });
   }
 });
 
 // POST new coupon
-app.post("/coupons", async (req, res) => {
+app.post("/coupons", verifyToken, async (req, res) => {
   try {
     const { code, discount, status } = req.body;
 
@@ -519,13 +567,13 @@ app.post("/coupons", async (req, res) => {
     const result = await couponsCol.insertOne(newCoupon);
     res.status(201).send({ message: "Coupon added", id: result.insertedId });
   } catch (err) {
-    console.error(err);
+    console.error("❌ Error adding coupon:", err);
     res.status(500).send({ error: "Failed to add coupon" });
   }
 });
 
 // PUT update coupon
-app.put("/coupons/:id", async (req, res) => {
+app.put("/coupons/:id", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { code, discount, status } = req.body;
@@ -558,13 +606,13 @@ app.put("/coupons/:id", async (req, res) => {
 
     res.send({ message: "Coupon updated", modifiedCount: result.modifiedCount });
   } catch (err) {
-    console.error(err);
+    console.error("❌ Error updating coupon:", err);
     res.status(500).send({ error: "Failed to update coupon" });
   }
 });
 
 // DELETE coupon
-app.delete("/coupons/:id", async (req, res) => {
+app.delete("/coupons/:id", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -575,7 +623,7 @@ app.delete("/coupons/:id", async (req, res) => {
 
     res.send({ message: "Coupon deleted", deletedCount: result.deletedCount });
   } catch (err) {
-    console.error(err);
+    console.error("❌ Error deleting coupon:", err);
     res.status(500).send({ error: "Failed to delete coupon" });
   }
 });
@@ -590,13 +638,13 @@ app.get("/announcements", async (req, res) => {
     const announcements = await announcementsCol.find(query).toArray();
     res.send({ announcements });
   } catch (err) {
-    console.error(err);
+    console.error("❌ Error fetching announcements:", err);
     res.status(500).send({ error: "Failed to fetch announcements" });
   }
 });
 
 // POST new announcement
-app.post("/announcements", async (req, res) => {
+app.post("/announcements", verifyToken, async (req, res) => {
   try {
     const { title, content } = req.body;
 
@@ -608,19 +656,19 @@ app.post("/announcements", async (req, res) => {
       title,
       content,
       createdAt: new Date(),
-      createdBy: req.body.createdBy || "admin@example.com", // Replace with actual admin email from auth
+      createdBy: req.user.email || "admin@example.com", // Use authenticated user email
     };
 
     const result = await announcementsCol.insertOne(newAnnouncement);
     res.status(201).send({ message: "Announcement added", id: result.insertedId });
   } catch (err) {
-    console.error(err);
+    console.error("❌ Error adding announcement:", err);
     res.status(500).send({ error: "Failed to add announcement" });
   }
 });
 
 // PUT update announcement
-app.put("/announcements/:id", async (req, res) => {
+app.put("/announcements/:id", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { title, content } = req.body;
@@ -644,13 +692,13 @@ app.put("/announcements/:id", async (req, res) => {
 
     res.send({ message: "Announcement updated", modifiedCount: result.modifiedCount });
   } catch (err) {
-    console.error(err);
+    console.error("❌ Error updating announcement:", err);
     res.status(500).send({ error: "Failed to update announcement" });
   }
 });
 
 // DELETE announcement
-app.delete("/announcements/:id", async (req, res) => {
+app.delete("/announcements/:id", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -661,12 +709,12 @@ app.delete("/announcements/:id", async (req, res) => {
 
     res.send({ message: "Announcement deleted", deletedCount: result.deletedCount });
   } catch (err) {
-    console.error(err);
+    console.error("❌ Error deleting announcement:", err);
     res.status(500).send({ error: "Failed to delete announcement" });
   }
 });
 
-// payment history
+// Payment history
 app.post("/payment-success", async (req, res) => {
   const { bookingId, transactionId } = req.body;
 
@@ -682,11 +730,11 @@ app.post("/payment-success", async (req, res) => {
       }
     );
 
-    if (result.modifiedCount === 1) {
-      res.send({ success: true });
-    } else {
-      res.status(404).send({ error: "Booking not found" });
+    if (result.modifiedCount === 0) {
+      return res.status(404).send({ error: "Booking not found" });
     }
+
+    res.send({ success: true });
   } catch (err) {
     console.error("Error updating booking after payment:", err);
     res.status(500).send({ error: "Internal Server Error" });
@@ -703,4 +751,9 @@ app.listen(port, () => {
   console.log(`🚀 Server is running on port ${port}`);
 });
 
-
+// Graceful shutdown
+process.on("SIGTERM", async () => {
+  console.log("🛑 SIGTERM received. Closing MongoDB connection...");
+  await client.close();
+  process.exit(0);
+});
