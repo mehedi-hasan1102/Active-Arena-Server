@@ -60,7 +60,7 @@ STRIPE_SECRET_KEY=your_stripe_secret_key
 ### 1. Clone the project
 
 ```bash
-git clone https://github.com/hasancodex/active-arena-server.git
+git clone https://github.com/mehedi-hasan1102/Active-Arena-Server
 cd active-arena-server
 ```
 
@@ -116,7 +116,7 @@ Make sure to set all `.env` values in the environment dashboard of your deployme
 
 ## 👨‍💻 Author
 
-- [Mehedi Hasan](https://github.com/hasancodex)
+- [Mehedi Hasan](https://github.com/mehedi-hasan1102)
 
 ---
 
